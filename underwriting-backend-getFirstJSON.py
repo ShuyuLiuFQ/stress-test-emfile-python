@@ -15,12 +15,14 @@ headers = {
     "sec-ch-ua-platform": "\"Linux\"",
     "sec-fetch-dest": "empty",
     "sec-fetch-mode": "cors",
-    "sec-fetch-site": "same-site"
+    "sec-fetch-site": "same-site",
+    "referer": "https://join-dev.foxquilt.com/"
 }
 
 query = """
-query getFirstJSON($effectiveDate: String, $transactionDate: String, $timezone: String, $transactionType: String!, $country: String, $provinceOrState: String) {
+query getFirstJSON($policyFoxdenId: String, $effectiveDate: String, $transactionDate: String, $timezone: String, $transactionType: String!, $country: String, $provinceOrState: String) {
   getFirstJSON(
+    policyFoxdenId: $policyFoxdenId
     effectiveDate: $effectiveDate
     transactionDate: $transactionDate
     timezone: $timezone
@@ -39,45 +41,70 @@ query getFirstJSON($effectiveDate: String, $transactionDate: String, $timezone: 
 """
 
 def build_payload():
-    variables = {
-        "effectiveDate": "2025-07-30",
-        "transactionDate": "2025-07-30",
-        "timezone": "America/Toronto",
-        "transactionType": "New Business",
-        "country": "Canada",
-        "provinceOrState": "Ontario"
-    }
-    print(f"\n[INFO] Building request with variables:\n{json.dumps(variables, indent=2)}")
     return json.dumps({
         "operationName": "getFirstJSON",
-        "variables": variables,
+        "variables": {
+            "effectiveDate": "2025-07-30",
+            "transactionDate": "2025-07-30",
+            "timezone": "America/Toronto",
+            "transactionType": "New Business",
+            "country": "United States of America",
+            "provinceOrState": "Florida"
+        },
         "query": query
     })
 
-def send_request_recursively(times_left):
-    if times_left <= 0:
-        print("[INFO] All requests completed.")
-        return
-
-    print(f"\n[INFO] ----- Request #{1001 - times_left} | Remaining: {times_left} -----")
-    start_time = datetime.now()
-    payload = build_payload()
-
+def log_important_response_info(data):
     try:
-        response = requests.post(url, headers=headers, data=payload)
-        duration = (datetime.now() - start_time).total_seconds()
-        print(f"[INFO] Response received in {duration:.2f} seconds. Status code: {response.status_code}")
+        result = data["data"]["getFirstJSON"]
+        print("[RESULT] isStateActive:", result.get("isStateActive"))
 
+        json_field = result.get("json", {})
+        if isinstance(json_field, dict):
+            print("[RESULT] json top-level keys:", list(json_field.keys()))
+        else:
+            print("[WARN] json field is not a dict")
+
+        raw_json = json.dumps(data)
+        truncated = (raw_json[:1000] + "...[truncated]") if len(raw_json) > 1000 else raw_json
+        print("[TRUNCATED FULL RESPONSE]", truncated)
+
+    except Exception as e:
+        print("[ERROR] Unexpected response format:", e)
+        print("[RAW]", json.dumps(data, indent=2)[:1000] + "...[truncated]")
+
+def send_request_with_retries(payload, retries=3):
+    for attempt in range(1, retries + 1):
         try:
-            data = response.json()
-            print(f"[INFO] Response data (truncated):\n{json.dumps(data, indent=2)[:1000]}")
-        except Exception as parse_err:
-            print("[ERROR] Failed to parse JSON response.")
-            print("Raw response text:\n", response.text)
-    except Exception as err:
-        print(f"[ERROR] Request failed: {err}")
+            response = requests.post(url, headers=headers, data=payload)
+            if response.status_code == 200:
+                return response
+            else:
+                print(f"[WARN] Attempt #{attempt} failed | Status: {response.status_code}")
+        except Exception as e:
+            print(f"[ERROR] Attempt #{attempt} failed | Error: {e}")
+        time.sleep(2)
+    return None
 
-    time.sleep(5)
-    send_request_recursively(times_left - 1)
+def send_request_loop(total_times):
+    for i in range(total_times):
+        print(f"\n[INFO] ===== Request #{i + 1} | Remaining: {total_times - i - 1} =====")
+        start_time = datetime.now()
+        payload = build_payload()
 
-send_request_recursively(1000)
+        response = send_request_with_retries(payload)
+        if response is None:
+            print("[ERROR] All retry attempts failed.")
+        else:
+            duration = (datetime.now() - start_time).total_seconds()
+            print(f"[INFO] Response received in {duration:.2f}s | Status: {response.status_code}")
+            try:
+                data = response.json()
+                log_important_response_info(data)
+            except Exception as e:
+                print("[ERROR] JSON parsing failed:", e)
+                print("[RAW]", response.text[:1000] + "...[truncated]")
+
+        time.sleep(5)
+
+send_request_loop(150)
