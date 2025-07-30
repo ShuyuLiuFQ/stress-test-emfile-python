@@ -2,6 +2,7 @@ import requests
 import time
 import json
 from datetime import datetime
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 url = "https://foxden-dev.api.foxquilt.com/underwriting/2022-06-30/graphql"
 
@@ -73,38 +74,48 @@ def log_important_response_info(data):
         print("[ERROR] Unexpected response format:", e)
         print("[RAW]", json.dumps(data, indent=2)[:1000] + "...[truncated]")
 
-def send_request_with_retries(payload, retries=3):
+def send_request_with_retries(payload, idx, retries=3):
     for attempt in range(1, retries + 1):
         try:
             response = requests.post(url, headers=headers, data=payload)
             if response.status_code == 200:
-                return response
+                return idx, datetime.now(), response.status_code, response
             else:
-                print(f"[WARN] Attempt #{attempt} failed | Status: {response.status_code}")
+                print(f"[WARN] #{idx} | Attempt #{attempt} failed | Status: {response.status_code}")
         except Exception as e:
-            print(f"[ERROR] Attempt #{attempt} failed | Error: {e}")
-        time.sleep(2)
-    return None
+            print(f"[ERROR] #{idx} | Attempt #{attempt} failed | Error: {e}")
+        time.sleep(1)
+    return idx, datetime.now(), "ERROR", None
 
-def send_request_loop(total_times):
-    for i in range(total_times):
-        print(f"\n[INFO] ===== Request #{i + 1} | Remaining: {total_times - i - 1} =====")
-        start_time = datetime.now()
-        payload = build_payload()
+def run_stress_test(concurrency=10, total_requests=50):
+    print(f"\n[START] Concurrency: {concurrency} | Total Requests: {total_requests}")
+    start_time = time.time()
 
-        response = send_request_with_retries(payload)
-        if response is None:
-            print("[ERROR] All retry attempts failed.")
-        else:
-            duration = (datetime.now() - start_time).total_seconds()
-            print(f"[INFO] Response received in {duration:.2f}s | Status: {response.status_code}")
-            try:
-                data = response.json()
-                log_important_response_info(data)
-            except Exception as e:
-                print("[ERROR] JSON parsing failed:", e)
-                print("[RAW]", response.text[:1000] + "...[truncated]")
+    with ThreadPoolExecutor(max_workers=concurrency) as executor:
+        futures = [
+            executor.submit(send_request_with_retries, build_payload(), i)
+            for i in range(total_requests)
+        ]
 
-        time.sleep(5)
+        for future in as_completed(futures):
+            idx, ts, status, response = future.result()
+            print(f"\n[INFO] Request #{idx} | Time: {ts.isoformat()} | Status: {status}")
 
-send_request_loop(150)
+            if response:
+                try:
+                    json_data = response.json()
+                    duration = response.elapsed.total_seconds()
+                    print(f"[INFO] Response duration: {duration:.2f}s")
+                    log_important_response_info(json_data)
+                except Exception as e:
+                    print("[ERROR] JSON parsing failed:", e)
+                    print("[RAW]", response.text[:1000] + "...[truncated]")
+            else:
+                print("[ERROR] No response returned after retries.")
+
+    total_duration = time.time() - start_time
+    print(f"\n[DONE] Completed {total_requests} requests in {total_duration:.2f} seconds")
+
+if __name__ == "__main__":
+    # Change parameters as needed:
+    run_stress_test(concurrency=10, total_requests=150)
