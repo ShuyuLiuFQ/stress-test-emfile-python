@@ -2,7 +2,6 @@ import requests
 import time
 import json
 from datetime import datetime
-from concurrent.futures import ThreadPoolExecutor, as_completed
 
 url = "https://foxden-dev.api.foxquilt.com/underwriting/2022-06-30/graphql"
 
@@ -87,35 +86,36 @@ def send_request_with_retries(payload, idx, retries=3):
         time.sleep(1)
     return idx, datetime.now(), "ERROR", None
 
-def run_stress_test(concurrency=10, total_requests=50):
-    print(f"\n[START] Concurrency: {concurrency} | Total Requests: {total_requests}")
+def run_stress_test(total_requests=50):
+    iso_start = datetime.now()
     start_time = time.time()
 
-    with ThreadPoolExecutor(max_workers=concurrency) as executor:
-        futures = [
-            executor.submit(send_request_with_retries, build_payload(), i)
-            for i in range(total_requests)
-        ]
+    for i in range(total_requests):
+        payload = build_payload()
+        idx, ts, status, response = send_request_with_retries(payload, i)
 
-        for future in as_completed(futures):
-            idx, ts, status, response = future.result()
-            print(f"\n[INFO] Request #{idx} | Time: {ts.isoformat()} | Status: {status}")
+        print(f"\n[INFO] Request #{idx} | Time: {ts.isoformat()} | Status: {status}")
 
-            if response:
-                try:
-                    json_data = response.json()
-                    duration = response.elapsed.total_seconds()
-                    print(f"[INFO] Response duration: {duration:.2f}s")
-                    log_important_response_info(json_data)
-                except Exception as e:
-                    print("[ERROR] JSON parsing failed:", e)
-                    print("[RAW]", response.text[:1000] + "...[truncated]")
-            else:
-                print("[ERROR] No response returned after retries.")
+        if response:
+            try:
+                json_data = response.json()
+                duration = response.elapsed.total_seconds()
+                print(f"[INFO] Response duration: {duration:.2f}s")
+                log_important_response_info(json_data)
+            except Exception as e:
+                print("[ERROR] JSON parsing failed:", e)
+                print("[RAW]", response.text[:1000] + "...[truncated]")
+        else:
+            print("[ERROR] No response returned after retries.")
 
-    total_duration = time.time() - start_time
-    print(f"\n[DONE] Completed {total_requests} requests in {total_duration:.2f} seconds")
+    end_time = time.time()
+    iso_end = datetime.now()
+    total_duration = end_time - start_time
+
+    print(f"\n[START] Sequential Requests for getFirstJSON | Total Requests: {total_requests}")
+    print(f"[START TIME]: {iso_start.isoformat()}")
+    print(f"[END TIME]:   {iso_end.isoformat()}")
+    print(f"[DURATION]:   {total_duration:.2f} seconds")
 
 if __name__ == "__main__":
-    # Change parameters as needed:
-    run_stress_test(concurrency=10, total_requests=150)
+    run_stress_test(total_requests=150)

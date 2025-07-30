@@ -2,7 +2,6 @@ import requests
 import json
 import time
 from datetime import datetime
-from concurrent.futures import ThreadPoolExecutor, as_completed
 
 URL = "https://foxden-dev.api.foxquilt.com/underwriting/2022-06-30/graphql"
 
@@ -72,14 +71,19 @@ PAYLOAD_TEMPLATE = {
 }"""
 }
 
-def send_request(session, idx):
-    try:
-        timestamp = datetime.now()
-        payload = json.dumps(PAYLOAD_TEMPLATE)
-        response = session.post(URL, headers=HEADERS, data=payload, timeout=10)
-        return idx, timestamp, response.status_code, response
-    except Exception as e:
-        return idx, datetime.now(), "ERROR", str(e)
+def send_request(payload, idx, retries=3):
+    for attempt in range(1, retries + 1):
+        try:
+            ts = datetime.now()
+            response = requests.post(URL, headers=HEADERS, data=payload, timeout=10)
+            if response.status_code == 200:
+                return idx, ts, response.status_code, response
+            else:
+                print(f"[WARN] #{idx} | Attempt #{attempt} failed | Status: {response.status_code}")
+        except Exception as e:
+            print(f"[ERROR] #{idx} | Attempt #{attempt} failed | Error: {e}")
+        time.sleep(1)
+    return idx, datetime.now(), "ERROR", None
 
 def format_response(idx, ts, status, response):
     if status == "ERROR":
@@ -105,19 +109,23 @@ def format_response(idx, ts, status, response):
         except Exception:
             pass
 
-def stress_test(concurrency=10, total_requests=100):
-    print(f"\n[START] Concurrency: {concurrency} | Total Requests: {total_requests}")
-    start = time.time()
+def run_stress_test(total_requests=200):
+    iso_start = datetime.now()
+    start_time = time.time()
 
-    with ThreadPoolExecutor(max_workers=concurrency) as executor:
-        with requests.Session() as session:
-            futures = [executor.submit(send_request, session, i) for i in range(total_requests)]
-            for future in as_completed(futures):
-                idx, ts, status, response = future.result()
-                format_response(idx, ts, status, response)
+    for i in range(total_requests):
+        payload = json.dumps(PAYLOAD_TEMPLATE)
+        idx, ts, status, response = send_request(payload, i)
+        format_response(idx, ts, status, response)
 
-    end = time.time()
-    print(f"\n[DONE] Completed {total_requests} requests in {end - start:.2f} seconds")
+    iso_end = datetime.now()
+    end_time = time.time()
+    total_duration = end_time - start_time
+
+    print(f"\n[START] Sequential Requests for createApplication | Total Requests: {total_requests}")
+    print(f"[START TIME]: {iso_start.isoformat()}")
+    print(f"[END TIME]:   {iso_end.isoformat()}")
+    print(f"[DURATION]:   {total_duration:.2f} seconds")
 
 if __name__ == "__main__":
-    stress_test(concurrency=10, total_requests=200)
+    run_stress_test(total_requests=150)
